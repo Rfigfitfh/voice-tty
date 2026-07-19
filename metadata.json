@@ -1,0 +1,6 @@
+{
+  "name": "Voice Enhancer",
+  "description": "Real-time voice and audio enhancer featuring intelligent noise suppression, studio filters, vocal clarity boosting, and session history.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
