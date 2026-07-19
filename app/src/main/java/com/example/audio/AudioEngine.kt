@@ -7,6 +7,7 @@ import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
+import android.net.Uri
 import android.os.SystemClock
 import android.util.Log
 import com.example.data.AppDatabase
@@ -225,6 +226,114 @@ class AudioEngine(private val context: Context) {
 
     fun stopRecording() {
         _isRecording.value = false
+    }
+
+    fun importAudioFile(uri: Uri, name: String) {
+        engineScope.launch {
+            try {
+                val outputDir = context.getExternalFilesDir(null) ?: context.filesDir
+                val finalWavFile = File(outputDir, "imported_${System.currentTimeMillis()}.wav")
+
+                val success = AudioDecoder.decodeToWav(context, uri, finalWavFile)
+                if (success && finalWavFile.exists()) {
+                    val fileLength = finalWavFile.length()
+                    val duration = ((fileLength - 44) * 1000) / 88200
+
+                    val recTitle = if (name.isBlank()) "Imported Studio Session" else name
+                    val recording = Recording(
+                        title = recTitle,
+                        filePath = finalWavFile.absolutePath,
+                        durationMs = duration,
+                        fileSize = fileLength,
+                        filterPreset = processor.selectedPreset,
+                        noiseThreshold = processor.noiseThreshold,
+                        isEnhanced = false
+                    )
+                    repository.insert(recording)
+                } else {
+                    Log.e(TAG, "Failed to decode imported file")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error importing file: ${e.message}", e)
+            }
+        }
+    }
+
+    fun applyFiltersAndExport(recording: Recording, newTitle: String) {
+        engineScope.launch {
+            var fis: FileInputStream? = null
+            var fos: FileOutputStream? = null
+            val outputDir = context.getExternalFilesDir(null) ?: context.filesDir
+            val tempPcmFile = File(outputDir, "temp_filter_${System.currentTimeMillis()}.pcm")
+            val finalWavFile = File(outputDir, "enhanced_export_${System.currentTimeMillis()}.wav")
+
+            try {
+                val sourceFile = File(recording.filePath)
+                if (!sourceFile.exists()) return@launch
+
+                fis = FileInputStream(sourceFile)
+                fos = FileOutputStream(tempPcmFile)
+
+                // Skip header (44 bytes)
+                fis.skip(44)
+
+                val byteBuffer = ByteArray(2048)
+                val shortBuffer = ShortArray(1024)
+
+                var totalBytesWritten = 0L
+
+                while (true) {
+                    val readCount = fis.read(byteBuffer)
+                    if (readCount <= 0) break
+
+                    val shortsToProcess = readCount / 2
+                    ByteBuffer.wrap(byteBuffer, 0, readCount)
+                        .order(ByteOrder.LITTLE_ENDIAN)
+                        .asShortBuffer()
+                        .get(shortBuffer, 0, shortsToProcess)
+
+                    // Process with the current active filters of processor
+                    val processedShorts = processor.process(shortBuffer.copyOf(shortsToProcess))
+
+                    val writeBuffer = ByteBuffer.allocate(processedShorts.size * 2)
+                    writeBuffer.order(ByteOrder.LITTLE_ENDIAN)
+                    for (s in processedShorts) {
+                        writeBuffer.putShort(s)
+                    }
+
+                    fos.write(writeBuffer.array())
+                    totalBytesWritten += processedShorts.size * 2
+                }
+
+                fis.close()
+                fis = null
+                fos.close()
+                fos = null
+
+                // Write standard WAV header
+                writeWavFile(tempPcmFile, finalWavFile, totalBytesWritten)
+                tempPcmFile.delete()
+
+                // Insert into DB as a new Enhanced session
+                val recordingRecord = Recording(
+                    title = newTitle,
+                    filePath = finalWavFile.absolutePath,
+                    durationMs = recording.durationMs,
+                    fileSize = finalWavFile.length(),
+                    filterPreset = processor.selectedPreset,
+                    noiseThreshold = processor.noiseThreshold,
+                    isEnhanced = true
+                )
+                repository.insert(recordingRecord)
+
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to apply filters and export", e)
+            } finally {
+                try { fis?.close() } catch (e: Exception) {}
+                try { fos?.close() } catch (e: Exception) {}
+                if (tempPcmFile.exists()) tempPcmFile.delete()
+            }
+        }
     }
 
     /**

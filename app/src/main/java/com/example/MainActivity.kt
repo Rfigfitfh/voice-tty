@@ -256,6 +256,19 @@ fun StudioDashboard(viewModel: MainViewModel) {
     var editingRecording by remember { mutableStateOf<Recording?>(null) }
     var renameDialogText by remember { mutableStateOf("") }
 
+    // Dialog state for exporting with effects
+    var exportingRecording by remember { mutableStateOf<Recording?>(null) }
+    var exportDialogText by remember { mutableStateOf("") }
+
+    val audioPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: android.net.Uri? ->
+        if (uri != null) {
+            viewModel.importAudioFile(uri, sessionTitle.ifBlank { "Imported Audio Session" })
+            sessionTitle = ""
+        }
+    }
+
     Column(
         modifier = Modifier.fillMaxSize()
     ) {
@@ -288,7 +301,7 @@ fun StudioDashboard(viewModel: MainViewModel) {
                     )
                 }
 
-                // B. Console Controller (Title, Record Trigger, Live Monitor)
+                // B. Console Controller (Title, Record Trigger, Live Monitor, Import)
                 item {
                     ConsoleControllerCard(
                         isRecording = isRecording,
@@ -304,7 +317,8 @@ fun StudioDashboard(viewModel: MainViewModel) {
                         },
                         recordingDuration = recordingDuration,
                         isMonitorEnabled = viewModel.isMonitorEnabled,
-                        onToggleMonitor = { viewModel.isMonitorEnabled = it }
+                        onToggleMonitor = { viewModel.isMonitorEnabled = it },
+                        onImportClick = { audioPickerLauncher.launch("audio/*") }
                     )
                 }
 
@@ -364,6 +378,10 @@ fun StudioDashboard(viewModel: MainViewModel) {
                             onRenameClick = {
                                 editingRecording = recording
                                 renameDialogText = recording.title
+                            },
+                            onExportClick = {
+                                exportingRecording = recording
+                                exportDialogText = "${recording.title} (Enhanced)"
                             }
                         )
                     }
@@ -434,6 +452,82 @@ fun StudioDashboard(viewModel: MainViewModel) {
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3D4B37)) // ForestGreen
                         ) {
                             Text("Save", color = Color.White)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Export with effects Dialog
+    if (exportingRecording != null) {
+        Dialog(onDismissRequest = { exportingRecording = null }) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = Color(0xFFF5F2EA), // CardBg
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "Apply Effects & Export",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF1D1B16) // NaturalTextPrimary
+                    )
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Text(
+                        text = "This will bake the currently selected preset (${viewModel.selectedPreset}) and any active noise suppression directly into a new permanent audio file.",
+                        fontSize = 12.sp,
+                        color = Color(0xFF5D5A53),
+                        textAlign = TextAlign.Center
+                    )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    OutlinedTextField(
+                        value = exportDialogText,
+                        onValueChange = { exportDialogText = it },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Color(0xFF3D4B37), // ForestGreen
+                            unfocusedBorderColor = Color(0xFFEBE6D9), // MutedTanBorder
+                            focusedTextColor = Color(0xFF1D1B16),
+                            unfocusedTextColor = Color(0xFF1D1B16)
+                        ),
+                        modifier = Modifier.fillMaxWidth().testTag("export_input")
+                    )
+
+                    Spacer(modifier = Modifier.height(20.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        TextButton(
+                            onClick = { exportingRecording = null }
+                        ) {
+                            Text("Cancel", color = Color(0xFF5D5A53)) // NaturalTextSecondary
+                        }
+
+                        Spacer(modifier = Modifier.width(8.dp))
+
+                        Button(
+                            onClick = {
+                                exportingRecording?.let {
+                                    viewModel.applyFiltersAndExport(it, exportDialogText)
+                                }
+                                exportingRecording = null
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3D4B37)) // ForestGreen
+                        ) {
+                            Text("Export", color = Color.White)
                         }
                     }
                 }
@@ -685,7 +779,8 @@ fun ConsoleControllerCard(
     onToggleRecord: () -> Unit,
     recordingDuration: Long,
     isMonitorEnabled: Boolean,
-    onToggleMonitor: (Boolean) -> Unit
+    onToggleMonitor: (Boolean) -> Unit,
+    onImportClick: () -> Unit
 ) {
     Card(
         shape = RoundedCornerShape(16.dp),
@@ -751,9 +846,28 @@ fun ConsoleControllerCard(
             // Main Trigger Buttons Block
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center,
+                horizontalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterHorizontally),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                // Import Audio Button
+                if (!isRecording) {
+                    Box(
+                        modifier = Modifier
+                            .size(54.dp)
+                            .background(Color(0xFFEBE6D9), CircleShape)
+                            .clickable { onImportClick() }
+                            .testTag("import_audio_button"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.MusicNote,
+                            contentDescription = "Import Audio",
+                            tint = Color(0xFF3D4B37),
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                }
+
                 // Large Pulsing Record Button
                 val scale = if (isRecording) {
                     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
@@ -849,6 +963,7 @@ fun FiltersSelectorSection(
 ) {
     val filters = listOf(
         FilterPreset("Original", "Bypass EQ", Icons.Filled.SettingsInputComponent, "Raw unmodified mic sound"),
+        FilterPreset("Crispy Studio", "Crispy Studio", Icons.Filled.RecordVoiceOver, "Airy high presence & pro sizzle"),
         FilterPreset("Studio Mic", "Studio Mic", Icons.Filled.GraphicEq, "Warm lows, crisp highs & presence"),
         FilterPreset("Clear Voice", "Clear Voice", Icons.Filled.RecordVoiceOver, "Low cut & speech mid-band focus"),
         FilterPreset("Podcast Pro", "Podcast", Icons.Filled.HeadsetMic, "Intimate broadcast-level clarity"),
@@ -1122,7 +1237,8 @@ fun RecordingItemRow(
     playbackProgress: Float,
     onPlayToggle: () -> Unit,
     onDelete: () -> Unit,
-    onRenameClick: () -> Unit
+    onRenameClick: () -> Unit,
+    onExportClick: () -> Unit
 ) {
     Card(
         shape = RoundedCornerShape(12.dp),
@@ -1218,7 +1334,7 @@ fun RecordingItemRow(
                                 .padding(horizontal = 4.dp, vertical = 1.dp)
                         ) {
                             Text(
-                                text = recording.filterPreset,
+                                text = if (recording.isEnhanced) "${recording.filterPreset} (Baked)" else recording.filterPreset,
                                 fontSize = 8.sp,
                                 color = Color(0xFF3D4B37), // ForestGreen
                                 fontWeight = FontWeight.Bold
@@ -1270,6 +1386,27 @@ fun RecordingItemRow(
                                 .background(Color(0xFF3D4B37), RoundedCornerShape(2.dp)) // ForestGreen
                         )
                     }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Button(
+                    onClick = onExportClick,
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3D4B37)), // ForestGreen
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(36.dp)
+                        .testTag("export_with_effects_${recording.id}")
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.RecordVoiceOver,
+                        contentDescription = "Bake & Export",
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Apply Active Filters & Export New File", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }

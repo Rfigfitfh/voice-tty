@@ -13,12 +13,12 @@ class AudioProcessor(val sampleRate: Float = 44100f) {
     var isDeRumbleEnabled = true
     var isNoiseGateEnabled = true
     var isCompressorEnabled = true
-    var selectedPreset = "Original" // Original, Studio, Clear, Podcast, Deep Bass, Radio, Ambient
+    var selectedPreset = "Original" // Original, Studio Mic, Clear Voice, Podcast Pro, Deep Bass, Radio Broadcast, Ambient Space, Crispy Studio
     var noiseThreshold = 120f // User adjustable slider threshold
 
     // DSP Blocks
     private val highPassFilter = HighPassFilter(sampleRate, 85f)
-    private val noiseGate = NoiseGate()
+    private val noiseGate = PowerfulNoiseCleaner()
     private val compressor = DynamicCompressor()
     private val reverb = ReverbEffect(sampleRate.toInt())
 
@@ -47,39 +47,45 @@ class AudioProcessor(val sampleRate: Float = 44100f) {
             }
             "Studio Mic" -> {
                 // Warm lows, polished vocal clarity, smooth high-end air
-                lowShelf.dbGain = 3.5f
-                midPeak.dbGain = 4.0f
-                highShelf.dbGain = 5.5f
+                lowShelf.dbGain = 4.0f
+                midPeak.dbGain = 4.5f
+                highShelf.dbGain = 6.0f
             }
             "Clear Voice" -> {
                 // High low cut, maximum clarity in vocal ranges
-                lowShelf.dbGain = -7.0f
-                midPeak.dbGain = 8.0f
-                highShelf.dbGain = 4.0f
+                lowShelf.dbGain = -6.0f
+                midPeak.dbGain = 9.0f
+                highShelf.dbGain = 5.0f
             }
             "Podcast Pro" -> {
                 // Broadcast proximity effect, warm speaking presence
-                lowShelf.dbGain = 5.0f
-                midPeak.dbGain = 3.0f
-                highShelf.dbGain = 2.0f
+                lowShelf.dbGain = 6.0f
+                midPeak.dbGain = 3.5f
+                highShelf.dbGain = 3.0f
             }
             "Deep Bass" -> {
                 // Deep, rich baritone boost
-                lowShelf.dbGain = 8.5f
-                midPeak.dbGain = -1.5f
-                highShelf.dbGain = -3.0f
+                lowShelf.dbGain = 9.5f
+                midPeak.dbGain = -1.0f
+                highShelf.dbGain = -2.0f
             }
             "Radio Broadcast" -> {
                 // Lo-fi telephone-style mid-focus
-                lowShelf.dbGain = -15.0f
-                midPeak.dbGain = 7.5f
-                highShelf.dbGain = -8.0f
+                lowShelf.dbGain = -12.0f
+                midPeak.dbGain = 8.5f
+                highShelf.dbGain = -6.0f
             }
             "Ambient Space" -> {
                 // Studio EQ + Reverb enabled during processing
                 lowShelf.dbGain = 2.0f
                 midPeak.dbGain = 3.5f
                 highShelf.dbGain = 4.0f
+            }
+            "Crispy Studio" -> {
+                // Dynamic high frequency boost and crisp presence for vocal air and maximum professional sizzle
+                lowShelf.dbGain = -2.0f
+                midPeak.dbGain = 7.0f
+                highShelf.dbGain = 11.5f
             }
         }
         lowShelf.recalculateCoefficients()
@@ -91,48 +97,37 @@ class AudioProcessor(val sampleRate: Float = 44100f) {
      * Processes a block of 16-bit PCM samples in place.
      */
     fun process(buffer: ShortArray): ShortArray {
-        var workBuffer = ShortArray(buffer.size)
-        buffer.copyInto(workBuffer)
-
         // 1. De-Rumble (High Pass Filter)
         if (isDeRumbleEnabled) {
-            val out = ShortArray(workBuffer.size)
-            highPassFilter.process(workBuffer, out)
-            workBuffer = out
+            highPassFilter.processInPlace(buffer)
         }
 
-        // 2. Intelligent Noise Gate
+        // 2. Intelligent Adaptive Noise Cleaner
         if (isNoiseGateEnabled) {
-            val out = ShortArray(workBuffer.size)
             noiseGate.threshold = noiseThreshold
-            noiseGate.process(workBuffer, out)
-            workBuffer = out
+            noiseGate.processInPlace(buffer)
         }
 
         // 3. 3-Band Studio Equalizer (Low-Shelf, Mid-Peak, High-Shelf)
-        for (i in workBuffer.indices) {
-            var sample = workBuffer[i].toFloat()
+        for (i in buffer.indices) {
+            var sample = buffer[i].toFloat()
             sample = lowShelf.process(sample)
             sample = midPeak.process(sample)
             sample = highShelf.process(sample)
-            workBuffer[i] = sample.coerceIn(-32768f, 32767f).toInt().toShort()
+            buffer[i] = sample.coerceIn(-32768f, 32767f).toInt().toShort()
         }
 
         // 4. Dynamic Range Vocal Compressor
         if (isCompressorEnabled) {
-            val out = ShortArray(workBuffer.size)
-            compressor.process(workBuffer, out)
-            workBuffer = out
+            compressor.processInPlace(buffer)
         }
 
         // 5. Spacious Reverb (For "Ambient Space" Preset)
         if (selectedPreset == "Ambient Space") {
-            val out = ShortArray(workBuffer.size)
-            reverb.process(workBuffer, out)
-            workBuffer = out
+            reverb.processInPlace(buffer)
         }
 
-        return workBuffer
+        return buffer
     }
 
     // ==========================================
@@ -150,13 +145,13 @@ class AudioProcessor(val sampleRate: Float = 44100f) {
             alpha = rc / (rc + dt)
         }
 
-        fun process(input: ShortArray, output: ShortArray) {
-            for (i in input.indices) {
-                val x = input[i].toFloat()
+        fun processInPlace(buffer: ShortArray) {
+            for (i in buffer.indices) {
+                val x = buffer[i].toFloat()
                 val y = alpha * (lastY + x - lastX)
                 lastX = x
                 lastY = y
-                output[i] = y.coerceIn(-32768f, 32767f).toInt().toShort()
+                buffer[i] = y.coerceIn(-32768f, 32767f).toInt().toShort()
             }
         }
 
@@ -166,80 +161,96 @@ class AudioProcessor(val sampleRate: Float = 44100f) {
         }
     }
 
-    class NoiseGate {
+    class PowerfulNoiseCleaner {
         var threshold = 120f
-        var reductionDb = -28f // Deep background suppression
+        var noiseReductionAmount = 0.90f // 90% background static reduction
+        private var noiseFloor = 100f
         private var currentGain = 1.0f
 
-        fun process(input: ShortArray, output: ShortArray) {
+        fun processInPlace(buffer: ShortArray) {
+            if (buffer.isEmpty()) return
+
             var sumSquare = 0.0
-            for (i in input.indices) {
-                val s = input[i].toDouble()
+            for (i in buffer.indices) {
+                val s = buffer[i].toDouble()
                 sumSquare += s * s
             }
-            val rms = sqrt(sumSquare / input.size).toFloat()
+            val rms = sqrt(sumSquare / buffer.size).toFloat()
 
-            // If RMS is below threshold, smoothly apply gating attenuation
-            val targetGain = if (rms < threshold) {
-                10.0f.pow(reductionDb / 20.0f)
+            // Adaptively track the background room noise floor
+            if (rms < noiseFloor) {
+                noiseFloor = noiseFloor * 0.92f + rms * 0.08f
             } else {
-                1.0f
+                noiseFloor = noiseFloor * 0.998f + rms * 0.002f
             }
 
-            // Exponentially smoothed gain to prevent clicking artifacts
-            val smoothingFactor = 0.08f 
-            for (i in input.indices) {
+            // Bound the tracker safely
+            if (noiseFloor < 8f) noiseFloor = 8f
+
+            // Calculate adaptive gain target based on soft expansion knee
+            val targetGain = if (rms < threshold) {
+                // If it is pure silence or very quiet background, apply high downward expansion
+                val quietRatio = (rms / (threshold + 0.01f)).coerceIn(0.1f, 1.0f)
+                (quietRatio * (1.0f - noiseReductionAmount)).coerceIn(0.01f, 0.15f)
+            } else {
+                // Speech is occurring: subtract noise floor fraction to clean voice and keep it crisp
+                (1.0f - (noiseFloor / (rms + 0.1f)) * noiseReductionAmount).coerceIn(0.25f, 1.0f)
+            }
+
+            // Exponentially smoothed gain to prevent clicking artifacts or pumping sounds
+            val smoothingFactor = 0.12f
+            for (i in buffer.indices) {
                 currentGain += (targetGain - currentGain) * smoothingFactor
-                output[i] = (input[i].toFloat() * currentGain).coerceIn(-32768f, 32767f).toInt().toShort()
+                buffer[i] = (buffer[i].toFloat() * currentGain).coerceIn(-32768f, 32767f).toInt().toShort()
             }
         }
     }
 
     class DynamicCompressor {
-        var ratio = 2.2f
-        var threshold = 7500f // Threshold above which we compress peak levels
+        var ratio = 2.4f
+        var threshold = 6800f // Balanced compression threshold for speech spikes
         private var currentGain = 1.0f
 
-        fun process(input: ShortArray, output: ShortArray) {
-            for (i in input.indices) {
-                val x = input[i].toFloat()
+        fun processInPlace(buffer: ShortArray) {
+            for (i in buffer.indices) {
+                val x = buffer[i].toFloat()
                 val absVal = abs(x)
 
                 val targetGain = if (absVal > threshold) {
                     val excess = absVal - threshold
                     val compressedAbsVal = threshold + excess / ratio
-                    compressedAbsVal / absVal
+                    compressedAbsVal / (absVal + 0.1f)
                 } else {
                     1.0f
                 }
 
-                // Smooth attack vs release times
-                val factor = if (targetGain < currentGain) 0.12f else 0.02f
+                val factor = if (targetGain < currentGain) 0.15f else 0.03f
                 currentGain += (targetGain - currentGain) * factor
-                output[i] = (x * currentGain).coerceIn(-32768f, 32767f).toInt().toShort()
+                buffer[i] = (x * currentGain).coerceIn(-32768f, 32767f).toInt().toShort()
             }
         }
     }
 
     class ReverbEffect(val sampleRate: Int) {
-        private val delayMs = 150
-        private val decay = 0.38f // Feedback damping factor
-        private val wetMix = 0.22f // Reverb blend
+        private val delayMs = 120
+        private val decay = 0.35f
+        private val wetMix = 0.20f
         private val delayBuffer = ShortArray((sampleRate * delayMs) / 1000)
         private var writeIndex = 0
 
-        fun process(input: ShortArray, output: ShortArray) {
-            for (i in input.indices) {
-                val x = input[i].toFloat()
+        fun processInPlace(buffer: ShortArray) {
+            if (delayBuffer.isEmpty()) return
+            for (i in buffer.indices) {
+                val x = buffer[i].toFloat()
                 val delayedSample = delayBuffer[writeIndex].toFloat()
 
-                // Save feedback back into the delay circular buffer
+                // Save feedback back into the circular delay buffer
                 delayBuffer[writeIndex] = (x + delayedSample * decay).coerceIn(-32768f, 32767f).toInt().toShort()
                 writeIndex = (writeIndex + 1) % delayBuffer.size
 
                 // Mix original Dry and wet Reverb signals
                 val mixed = x * (1f - wetMix) + delayedSample * wetMix
-                output[i] = mixed.coerceIn(-32768f, 32767f).toInt().toShort()
+                buffer[i] = mixed.coerceIn(-32768f, 32767f).toInt().toShort()
             }
         }
 

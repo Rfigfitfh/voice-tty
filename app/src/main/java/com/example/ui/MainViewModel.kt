@@ -90,6 +90,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         audioEngine.stopRecording()
     }
 
+    fun importAudioFile(uri: android.net.Uri, name: String) {
+        viewModelScope.launch {
+            audioEngine.importAudioFile(uri, name)
+        }
+    }
+
+    fun applyFiltersAndExport(recording: Recording, newTitle: String) {
+        viewModelScope.launch {
+            audioEngine.applyFiltersAndExport(recording, newTitle)
+        }
+    }
+
     fun startPlayback(recording: Recording) {
         viewModelScope.launch {
             audioEngine.startPlayback(recording)
